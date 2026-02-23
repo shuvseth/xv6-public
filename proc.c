@@ -20,6 +20,17 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+
+static unsigned int randstate = 1;
+
+static unsigned int
+krand(void)
+{
+  randstate = randstate * 1664525 + 1013904223;
+  return randstate;
+}
+
+
 void
 pinit(void)
 {
@@ -88,7 +99,7 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
-
+  p->tickets = 1;
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -199,7 +210,7 @@ fork(void)
   np->sz = curproc->sz;
   np->parent = curproc;
   *np->tf = *curproc->tf;
-
+  np->tickets = curproc->tickets;
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
 
@@ -325,36 +336,51 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
-  for(;;){
-    // Enable interrupts on this processor.
-    sti();
 
-    // Loop over process table looking for process to run.
+  for(;;){
+    sti();
     acquire(&ptable.lock);
+
+    // 1) Sum tickets of RUNNABLE procs
+    int total = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->state == RUNNABLE)
+        total += p->tickets;
+    }
+
+    // If nobody is runnable, just release lock and try again
+    if(total == 0){
+      release(&ptable.lock);
+      continue;
+    }
+
+    // 2) Pick winning ticket
+    int winner = krand() % total;
+
+    // 3) Find the process that owns the winning ticket
+    int count = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+      count += p->tickets;
+      if(count > winner){
+        // 4) Run the chosen process (same switch code as before)
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+        c->proc = 0;
+        break;
+      }
     }
-    release(&ptable.lock);
 
+    release(&ptable.lock);
   }
 }
-
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this

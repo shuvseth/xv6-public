@@ -15,7 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
-
+static struct inode* create(char *path, short type, short major, short minor);
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -164,6 +164,40 @@ bad:
   return -1;
 }
 
+int
+sys_symlink(void)
+{
+  char *target, *linkpath;
+  struct inode *ip;
+
+  if(argstr(0, &target) < 0)
+    return -1;
+  if(argstr(1, &linkpath) < 0)
+    return -1;
+
+  begin_op();
+
+  ip = create(linkpath, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  // create() already returns ip locked, so do NOT call ilock(ip) again
+
+  if(writei(ip, target, 0, strlen(target) + 1) != strlen(target) + 1){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iupdate(ip);
+  iunlockput(ip);
+  end_op();
+
+  return 0;
+}
+
 // Is the directory dp empty except for "." and ".." ?
 static int
 isdirempty(struct inode *dp)
@@ -302,11 +336,42 @@ sys_open(void)
       return -1;
     }
   } else {
+    int depth, n;
+    char target[128];
+
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
+
     ilock(ip);
+
+    for(depth = 0; depth < 10 && ip->type == T_SYMLINK; depth++){
+      n = readi(ip, target, 0, sizeof(target) - 1);
+      if(n <= 0){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+
+      target[n] = '\0';
+
+      iunlockput(ip);
+
+      if((ip = namei(target)) == 0){
+        end_op();
+        return -1;
+      }
+
+      ilock(ip);
+    }
+
+    if(ip->type == T_SYMLINK){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -321,6 +386,7 @@ sys_open(void)
     end_op();
     return -1;
   }
+
   iunlock(ip);
   end_op();
 

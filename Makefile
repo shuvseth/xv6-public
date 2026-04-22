@@ -55,7 +55,8 @@ endif
 
 # Try to infer the correct QEMU
 ifndef QEMU
-QEMU = $(shell if which qemu > /dev/null; \
+QEMU = /usr/libexec/qemu-kvm
+#QEMU = $(shell if which qemu > /dev/null; \
 	then echo qemu; exit; \
 	elif which qemu-system-i386 > /dev/null; \
 	then echo qemu-system-i386; exit; \
@@ -181,6 +182,7 @@ UPROGS=\
 	_usertests\
 	_wc\
 	_zombie\
+	_testsymlink\
 
 fs.img: mkfs README $(UPROGS)
 	./mkfs fs.img README $(UPROGS)
